@@ -1,0 +1,8 @@
+resources:
+- configmap.yaml
+- cronjob.yaml
+- deployment.yaml
+- ingress.yaml
+- mongo-user-creation-job.yaml
+- secret.yaml
+- service.yaml

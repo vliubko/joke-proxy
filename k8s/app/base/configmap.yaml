@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: joke-proxy-config
+data:
+  DB_NAME: jokesDB
+  DB_USER: joke-user
+  DB_HOST: mongo.mongodb.svc.cluster.local
+  DB_PORT: "27017"

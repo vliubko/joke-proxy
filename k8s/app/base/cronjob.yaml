@@ -1,0 +1,155 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: credential-rotator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: credential-rotator
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "patch"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "patch", "watch", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: credential-rotator
+subjects:
+- kind: ServiceAccount
+  name: credential-rotator
+roleRef:
+  kind: Role
+  name: credential-rotator
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: joke-proxy-credential-rotator
+  labels:
+    app: joke-proxy
+spec:
+  schedule: "*/1 * * * *"          # Runs every minute
+  concurrencyPolicy: Forbid        # Prevents concurrent runs
+  successfulJobsHistoryLimit: 10   # Keep only last 10 successful jobs
+  failedJobsHistoryLimit: 3        # Keep only 3 failed jobs
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: joke-proxy
+        spec:
+          serviceAccountName: credential-rotator
+          restartPolicy: OnFailure
+          volumes:
+            - name: shared-data
+              emptyDir: {}
+          initContainers:
+            - name: password-generator
+              image: busybox
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  # Generate new password and save to shared volume
+                  tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 10 > /shared/new-password
+                  echo "New password is generated!"
+              volumeMounts:
+                - name: shared-data
+                  mountPath: /shared
+          containers:
+            - name: mongo-updater
+              image: mongo:8.0.4
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  # Read the generated password
+                  NEW_PASS=$(cat /shared/new-password)
+                  echo "Updating MongoDB password..."
+                  
+                  # Update MongoDB password
+                  mongosh admin --host "$DB_HOST" \
+                    -u "$MONGO_ADMIN_USERNAME" \
+                    -p "$MONGO_ADMIN_PASSWORD" \
+                    --eval "db.getSiblingDB('$DB_NAME').updateUser('$DB_USER', { pwd: '$NEW_PASS' })"
+                  
+                  if [ $? -eq 0 ]; then
+                    echo "MongoDB password updated successfully"
+                    # Signal success to k8s-updater
+                    touch /shared/mongo-success
+                  else
+                    echo "Failed to update MongoDB password"
+                    exit 1
+                  fi
+              volumeMounts:
+                - name: shared-data
+                  mountPath: /shared
+              env:
+                - name: MONGO_ADMIN_USERNAME
+                  valueFrom:
+                    secretKeyRef:
+                      name: mongodb-root-credentials
+                      key: username
+                - name: MONGO_ADMIN_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: mongodb-root-credentials
+                      key: password
+                - name: DB_NAME
+                  valueFrom:
+                    configMapKeyRef:
+                      name: joke-proxy-config
+                      key: DB_NAME
+                - name: DB_USER
+                  valueFrom:
+                    configMapKeyRef:
+                      name: joke-proxy-config
+                      key: DB_USER
+                - name: DB_HOST
+                  valueFrom:
+                    configMapKeyRef:
+                      name: joke-proxy-config
+                      key: DB_HOST
+
+            - name: k8s-updater
+              image: bitnami/kubectl:latest
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  # Wait for MongoDB update to complete
+                  while [ ! -f /shared/mongo-success ]; do
+                    echo "Waiting for MongoDB update..."
+                    sleep 2
+                  done
+                  
+                  # Read the generated password
+                  NEW_PASS=$(cat /shared/new-password)
+                  echo "Updating Kubernetes secret..."
+                  
+                  # Update K8s secret
+                  kubectl patch secret joke-proxy-secret \
+                    --type=merge \
+                    -p "{\"data\":{\"DB_PASSWORD\":\"$(echo -n $NEW_PASS | base64)\"}}"
+                  
+                  # Patch deployment to trigger restart
+                  kubectl patch deployment joke-proxy --patch "
+                    spec:
+                      template:
+                        metadata:
+                          annotations:
+                            kubectl.kubernetes.io/restartedAt: '$(date +%s)'
+                  "
+                  
+                  # Wait for rollout
+                  kubectl rollout status deployment/joke-proxy
+
+                  echo "Credential rotation completed!"
+                  
+              volumeMounts:
+                - name: shared-data
+                  mountPath: /shared

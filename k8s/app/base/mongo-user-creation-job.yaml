@@ -1,0 +1,69 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mongo-user-creation-script
+data:
+  create-user.js: |
+    db = db.getSiblingDB(process.env.DB_NAME);
+    db.createUser({
+      user: process.env.DB_USER,
+      pwd: process.env.DB_PASSWORD,
+      roles: [{ role: "readWrite", db: process.env.DB_NAME }]
+    })
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mongodb-root-credentials
+type: Opaque
+data:
+  username: YWRtaW4=          # 'admin' in base64
+  password: cm9vdHBhc3N3b3Jk  # 'rootpassword' in base64 
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mongo-user-creation-job
+spec:
+  template:
+    spec:
+      containers:
+      - name: mongo-user-creation
+        image: mongo:8.0.4
+        command: ["/bin/sh", "-c"]
+        args:
+          - mongosh admin --host mongo.mongodb.svc.cluster.local -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --eval "$(cat /scripts/create-user.js)"
+        env:
+        - name: MONGO_INITDB_ROOT_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: mongodb-root-credentials
+              key: username
+        - name: MONGO_INITDB_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mongodb-root-credentials
+              key: password
+        - name: DB_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: joke-proxy-config
+              key: DB_NAME
+        - name: DB_USER
+          valueFrom:
+            configMapKeyRef:
+              name: joke-proxy-config
+              key: DB_USER
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: joke-proxy-secret
+              key: DB_PASSWORD
+        volumeMounts:
+        - name: script
+          mountPath: /scripts
+      restartPolicy: OnFailure
+      volumes:
+      - name: script
+        configMap:
+          name: mongo-user-creation-script

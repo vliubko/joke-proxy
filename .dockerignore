@@ -1,0 +1,47 @@
+# Version control
+.git
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.env
+.venv
+env/
+venv/
+ENV/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Project specific
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# Local development files
+*.log
+.env.local
+.env.*.local
+*.db
+
+# Documentation
+docs/
+README.md
+CHANGELOG.md
+LICENSE
+
+# Test files
+tests/
+test/
+*_test.py
+*_tests.py

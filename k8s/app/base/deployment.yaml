@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: joke-proxy
+  labels:
+    app: joke-proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: joke-proxy
+  template:
+    metadata:
+      labels:
+        app: joke-proxy
+        env: base
+    spec:
+      containers:
+      - name: joke-proxy
+        imagePullPolicy: Never # to avoid pulling image from the registry and use the local image loaded to the kind cluster
+        image: joke-proxy:latest
+        ports:
+          - containerPort: 8000
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 3
+          periodSeconds: 5
+          timeoutSeconds: 2
+          successThreshold: 1
+          failureThreshold: 3
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "200m"
+            memory: "256Mi"
+        envFrom:
+        - secretRef:
+            name: joke-proxy-secret
+        - configMapRef:
+            name: joke-proxy-config
